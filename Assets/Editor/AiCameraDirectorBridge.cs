@@ -4,14 +4,26 @@ using UnityEngine.Splines;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.VisualScripting;
+using UnityEditor;
 
 public static class AiCameraDirectorBridge
 {
-    /// <param name="vCam">Ref to the created CinemachineCamera</param>
-    /// <returns>Success or Failure</returns>
-    public static string TryCreateVCam(string name, Transform target, out CinemachineCamera vCam)
+    static bool TryParseGid(string gidString, out GlobalObjectId gid)
     {
-        vCam = null;
+        if (string.IsNullOrEmpty(gidString))
+        {
+            gid = default;
+            return false;
+        }
+        string cleanGid = gidString.Trim('[', ']', ' ');
+        return GlobalObjectId.TryParse(cleanGid, out gid);
+    }
+
+    /// <returns>Success or Failure</returns>
+    public static string TryCreateVCam(string name, string targetGlobalIdString, out string vCamGlobalId, out string brainGlobalId)
+    {
+        vCamGlobalId = string.Empty;
+        brainGlobalId = string.Empty;
         var skipValidation = name.Contains("_OVERRIDE");
         if (skipValidation)
         {
@@ -23,52 +35,65 @@ public static class AiCameraDirectorBridge
         if (vCams.Any(e => e.name == name) && !skipValidation)
         {
             // already existing vcam found (same name)
-            return "[[PROMPTRETURN]] Ask the user: Override it? " +                                                         
-                   "If yes: call TryCreateVCam again with the name + '_OVERRIDE'. " +                     
-                   "If no: stop and do nothing.";
+            return "[[PROMPTRETURN]] AWAITING_INPUT: Override it? " +                                                         
+                   "OPTION_1: call TryCreateVCam again with the name + '_OVERRIDE'. " +                     
+                   "OPTION_2: stop and do nothing.";
         }
 
-        return CreateVCam(name, target, out vCam);
+        if (!TryParseGid(targetGlobalIdString, out var targetGid))
+        {
+            return "[[PROMPTRETURN]] FAILURE: the passed in targetgid is not parsable: " + targetGlobalIdString;
+        }
+        
+        var targetObj = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(targetGid);
+        Transform target = null;
+        if (targetObj is GameObject go) target = go.transform;
+        else if (targetObj is Component comp) target = comp.transform;
+
+        if (target == null)
+            return "[[PROMPTRETURN]] FAILURE: Could not resolve a Transform from the provided targetGlobalId. Make sure the target GameObject exists in the currently open scene.";
+
+        return CreateVCam(name, target, out vCamGlobalId, out brainGlobalId);
     }
 
-    static string CreateVCam(string name, Transform target, out CinemachineCamera vCam)
+    static string CreateVCam(string name, Transform target, out string vCamGlobalId, out string brainGlobalId)
     {
         var mainCam = Camera.main;
         if (mainCam == null)
         {
-            var mainCamObj = new GameObject
-            {
-                name = "Main Camera"
-            };
+            var mainCamObj = new GameObject { name = "Main Camera" };
             mainCam = mainCamObj.AddComponent<Camera>();
         }
 
-        if (mainCam.GetComponent<CinemachineBrain>() == null)
-        {
-            mainCam.AddComponent<CinemachineBrain>();
-        }
-        
-        var vCamGo = new GameObject
-        {
-            name = name,
-        };
+        var brain = mainCam.GetComponent<CinemachineBrain>();
+        if (brain == null)
+            brain = mainCam.AddComponent<CinemachineBrain>();
 
-        vCam = vCamGo.AddComponent<CinemachineCamera>();
+        brainGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(brain).ToString();
+
+        var vCamGo = new GameObject { name = name };
+        var vCam = vCamGo.AddComponent<CinemachineCamera>();
         vCam.Target.TrackingTarget = target;
+        vCam.Target.LookAtTarget = target;
+        vCamGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(vCam).ToString();
+
+        EditorUtility.SetDirty(vCam);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(vCamGo.scene);
+
         return "[[PROMPTRETURN]] Success";
     }
 
     // TODO: Could add closed option
-    public static string TryCreateSpline(string name, List<Vector3> positionsInOrder, out SplineContainer splineContainer)
+    public static string TryCreateSpline(string name, List<Vector3> positionsInOrder, out string splineContainerGlobalId)
     {
-        splineContainer = null;
+        splineContainerGlobalId = string.Empty;
         var skipValidation = name.Contains("_OVERRIDE");
         if (skipValidation)
         {
             name = name.Replace("_OVERRIDE", "");                                                                                                                                        
         }
         
-        // 1. query the currently opened scene if theres a vcam somewhere that already has the same name..
+        // query the currently opened scene if theres a vcam somewhere that already has the same name..
         var splines = Object.FindObjectsByType<SplineContainer>();
         if (splines.Any(e => e.name == name) && !skipValidation)
         {
@@ -78,12 +103,12 @@ public static class AiCameraDirectorBridge
                    "If no: stop and do nothing.";
         }
 
-        return CreateSpline(name, positionsInOrder, out splineContainer);
+        return CreateSpline(name, positionsInOrder, out splineContainerGlobalId);
     }
 
-    static string CreateSpline(string name, List<Vector3> positionsInOrder, out SplineContainer splineContainer)
+    static string CreateSpline(string name, List<Vector3> positionsInOrder, out string splineContainerGlobalId)
     {
-        splineContainer = null;
+        splineContainerGlobalId = string.Empty;
         if (positionsInOrder is { Count: < 1 })
         {
             return "[[PROMPTRETURN]] Failure: You tried creting a spline without knots";
@@ -93,25 +118,37 @@ public static class AiCameraDirectorBridge
         {
             name = name
         };
-        splineContainer = splineGo.AddComponent<SplineContainer>();
+        var splineContainer = splineGo.AddComponent<SplineContainer>();
         var spline = splineContainer.Spline; // TODO: Relevant for closedloop if wanted
         foreach (var curPosition in positionsInOrder)
         {
             spline.Add(new BezierKnot(curPosition));
         }
-
+        splineContainerGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(splineContainer).ToString();
         return "[[PROMPTRETURN]] Success";
     }
 
-    public static string AddCameraDollyToSpline(SplineContainer container, CinemachineCamera vCam)
+    public static string AddCameraDollyToSpline(string containerGlobalIdString, string vCamGlobalIdString)
     {
+        if (!TryParseGid(containerGlobalIdString, out var containerGid))
+        {
+            return "[[PROMPTRETURN]] Failure: The Global Object ID for the container you provided is not parsable";
+        }
+        var container = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(containerGid) as SplineContainer;
         if (container == null)
         {
-            return "[[PROMPTRETURN]] Failure: The SplineContainer you provided is null";
+            return "[[PROMPTRETURN]] Failure: The Container from that GID is null";
         }
+
+        if (!TryParseGid(vCamGlobalIdString, out var vCamGid))
+        {
+            return "[[PROMPTRETURN]] Failure: The Global Object ID for the vcam you provided is not parsable";
+        }
+
+        var vCam = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(vCamGid) as CinemachineCamera;
         if (vCam == null)
         {
-            return "[[PROMPTRETURN]] Failure: The CinemachineCamera you provided is null";
+            return "[[PROMPTRETURN]] Failure: The CinemachineCamera from that GID is null";
         }
 
         var dolly = vCam.gameObject.AddComponent<CinemachineSplineDolly>();
