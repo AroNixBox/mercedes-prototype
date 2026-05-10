@@ -1,4 +1,0 @@
-## PROMPTRETURN Protocol                                                                       
-If any method returns a string that starts with [[PROMPTRETURN]], do NOT continue executing.
-Instead: read the message after [[PROMPTRETURN]], present it as a question to the user, wait   
-for their answer, then act accordingly as described in the message.  

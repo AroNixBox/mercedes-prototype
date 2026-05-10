@@ -27,7 +27,7 @@ public static class TimelineAiBridge
             name = name.Replace("_OVERRIDE", "");                                                                                                                                        
         }
 
-        if (!GetTimelineAsset(name, out var timelineAsset, out var fullPath) && !skipValidation)
+        if (GetTimelineAsset(name, out _, out var fullPath) && !skipValidation)
         {
             // already existing timeline-asset found (same name)
             return "[[PROMPTRETURN]] AWAITING_INPUT: Override it? " +                                                         
@@ -35,10 +35,11 @@ public static class TimelineAiBridge
                    "OPTION_2: stop and do nothing.";
         }
         
-        return CreateAsset(timelineAsset, fullPath, out timelineAssetPath);
+        return CreateAsset(fullPath, out timelineAssetPath);
     }
-    static string CreateAsset(TimelineAsset timelineAsset, string fullPath, out string timelineAssetPath)
+    static string CreateAsset(string fullPath, out string timelineAssetPath)
     {
+        var timelineAsset = ScriptableObject.CreateInstance<TimelineAsset>();
         AssetDatabase.CreateAsset(timelineAsset, fullPath);
         AssetDatabase.SaveAssets();
         timelineAssetPath = fullPath;
@@ -156,6 +157,7 @@ public static class TimelineAiBridge
         director.SetReferenceValue(shot!.VirtualCamera.exposedName, assignedCamera);
         
         EditorUtility.SetDirty(timeline);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
         EditorUtility.SetDirty(director);
         AssetDatabase.SaveAssets();
         
@@ -198,7 +200,7 @@ public static class TimelineAiBridge
         director.SetGenericBinding(animTrack, animator);
     
         AnimationClip clip = new AnimationClip();
-        clip.name = "CameraAnim";
+        clip.name = animatedObj.name;
         
         // order important
         // 1 add to timeline
@@ -209,7 +211,7 @@ public static class TimelineAiBridge
         animClip.start = startTime;
         animClip.duration = duration;
         // TODO: Change aswell, maybe ask user for name?
-        animClip.displayName = "Camera Animation";
+        animClip.displayName = animatedObj.name;
     
         EditorUtility.SetDirty(clip);
         EditorUtility.SetDirty(animatedObj.gameObject);
@@ -239,7 +241,7 @@ public static class TimelineAiBridge
     }  
     public static string SetAnimationTrackSplinePosition(string timelinePath, string trackName, string animationClipName, List<(float dutchValue, float clipTime)> trackPositions)
     {
-        return SetAnimationTrackCurve(timelinePath, trackName, animationClipName, "CinemachineCamera", "m_SplineSettings.Position",
+        return SetAnimationTrackCurve(timelinePath, trackName, animationClipName, "CinemachineSplineDolly", "m_SplineSettings.Position",
             trackPositions);
     }
 
@@ -293,10 +295,13 @@ public static class TimelineAiBridge
         }
         
         // TODO: If this doesnt work:
-        var type = Type.GetType(componentTypeName);
+        var type = AppDomain.CurrentDomain.GetAssemblies()
+            .SelectMany(a => a.GetTypes())
+            .FirstOrDefault(t => t.Name == componentTypeName);
+        
         if (type == null)
         {
-            return "[[PROMPTRETURN]] FAILURE: to recreate the type from the string, use other solution instead";
+            return "[[PROMPTRETURN]] FAILURE: to recreate the type from the string";
         }
         // TODO:
         // other solution:
