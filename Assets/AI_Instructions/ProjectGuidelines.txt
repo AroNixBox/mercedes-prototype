@@ -3,7 +3,6 @@
 YOU MUST NEVER ASSUME WHAT THE USER WOULD CHOOSE.
 YOU MUST NEVER CALL MULTIPLE BRIDGE METHODS IN ONE TURN IF ANY OF THEM DID NOT RETURN 'SUCCESS'.
 
-## The Golden Rule
 As soon as a return string does NOT start with "SUCCESS", your response must end immediately.
 You may not execute further logic, call further tools, or make any assumptions.
 
@@ -12,48 +11,25 @@ You may not execute further logic, call further tools, or make any assumptions.
 # Behavior for Each Return Status
 
 ## SUCCESS
-→ Report to the user: "✓ [MethodName] successful"
-→ Proceed directly to the next step without asking for confirmation.
+→ Report to the user: "✓ [MethodName] successful" → proceed to the next step.
 
 ## FAILURE: <reason>
-Write the user exactly this message (replace values):
-
 ⛔ BRIDGE FAILURE: [MethodName]
 [exact reason from the return string]
-
 Please provide an instruction on how to proceed.
 
-After that: no further tool calls, no suggested fixes, no parameter adjustments.
-You do not have enough context to correctly resolve the error — only the user has that context.
-Any autonomous fix attempt will result in a corrupted scene state.
+No further tool calls. No suggested fixes. No parameter adjustments.
+Only the user has enough context to resolve errors. Any autonomous fix corrupts the scene.
 
 ## AWAITING_INPUT: <question> OPTION_1: ... OPTION_2: ...
-Write the user exactly this message (replace values, present options clearly as a choice):
-
----
 🔵 BRIDGE AWAITING INPUT: [MethodName]
 [question from the return string]
-
 Please choose an option:
-- OPTION_1: [description of option 1]
-- OPTION_2: [description of option 2]
----
+  👉 OPTION_1: [description]
+  👉 OPTION_2: [description]
 
-After that: no further tool calls, no assumption about what the user would choose.
-Wait until the user explicitly names an option, then call the same method again with the chosen parameter.
-
----
-
-# Forbidden Patterns (Anti-Patterns)
-
-❌ **The "Auto-Override" Pattern:**
-Call: `TryCreateAsset("Name")` → Return: `AWAITING_INPUT: Override?`
-Wrong reaction: Immediately calling `TryCreateAsset("Name_OVERRIDE")` in the same turn.
-Correct reaction: Present the question to the user and wait for their answer.
-
-❌ **The "Batch-Ignoring" Pattern:**
-Sending multiple Bridge calls in one tool chain without waiting for the result of the previous call.
-As an LLM, you must validate the output of each call individually before generating the next one.
+No further tool calls. Do NOT choose an option yourself.
+Wait for the user's explicit choice, then call the same method again with that parameter.
 
 ---
 
@@ -63,111 +39,97 @@ As an LLM, you must validate the output of each call individually before generat
 2. Timeline creation and track setup → exclusively TimelineAiBridge
 3. No manual spline creation, no direct Cinemachine/Timeline setup outside the bridges
 4. Additional functionality needed → ask the user, never implement it yourself
-5. Reference integrity: only use return values (out parameters, return strings) for subsequent calls — manually assembling paths is forbidden
+5. Reference integrity: only use GIDs and return values from previous calls — never manually assemble paths or names
+
+## Scene Structure (IMPORTANT)
+- There is exactly ONE director and ONE timeline per scene. Store directorGlobalId and timelineAssetName immediately after creation — they are required for every subsequent call.
+- There is exactly ONE CinemachineTrack. Never call CreateCinemachineTrack more than once. Use SetCinemachineTrack to add shots to the existing track.
+- When a camera has an animation covering e.g. seconds 8–14, call SetCinemachineTrack with startTime=8, duration=6 to make that camera active for exactly that window.
+
+## Animation Timing
+Animations must use realistic durations. A camera move that should feel like 5 seconds must have keyframes spanning 5 seconds (clipTime 0→5), not 0→0.1. Fast keyframes that blaze through in a few frames are wrong.
+
+---
+
+# Forbidden Patterns
+
+❌ **Script wrapping:** NEVER generate a C# script or CommandScript that chains multiple bridge calls together. Bridge methods must always be called as individual direct tool calls — never bundled into a script that executes as one block. A script bypasses the entire gate system and makes failure handling and AWAITING_INPUT impossible.
+
+❌ **Auto-Override:** Getting AWAITING_INPUT and immediately calling the method again with "_OVERRIDE" without asking the user.
+
+❌ **Batch calls:** Sending multiple Bridge calls without validating each result individually first.
+
+❌ **Creating a second CinemachineTrack** instead of adding a shot to the existing one.
 
 ---
 
 # API Reference
 
 ## Reference System
-All scene object references are passed and returned as GlobalObjectId strings (GIDs).
-- out string *GlobalId → GID of the created scene object; store and pass to subsequent calls
-- string *GlobalId params → must be a GID returned by a previous bridge call
-- string timelineAssetName → plain asset name string (not a GID), used to look up the .playable file
+- out string *GlobalId → GID of the created scene object; store and reuse for all subsequent calls
+- string *GlobalId params → must be a GID from a previous bridge call
+- string timelineAssetName → plain name string (not a GID), used to look up the .playable file
 
 ## AiCameraDirectorBridge
 
 TryCreateVCam(string name, string targetGlobalId, out string vCamGlobalId, out string brainGlobalId)
-  Creates a new CinemachineCamera in the scene.
-  Automatically adds CinemachineBrain to the Main Camera if not present.
-  Returns vCamGlobalId and brainGlobalId — both are needed for subsequent calls.
+  Creates a CinemachineCamera. Adds CinemachineBrain to Main Camera if missing.
+  Returns vCamGlobalId and brainGlobalId — store both.
   Name conflict → AWAITING_INPUT. If yes: call again with name + "_OVERRIDE".
 
 TryCreateSpline(string name, List<Vector3> positionsInOrder, out string splineContainerGlobalId)
-  Creates a spline from an ordered list of world positions (min. 1 position required).
-  Name conflict → same override logic as TryCreateVCam.
+  Creates a spline from ordered world positions (min. 1). Name conflict → same override logic.
 
 AddCameraDollyToSpline(string containerGlobalId, string vCamGlobalId)
   Adds CinemachineSplineDolly to the VCam and binds the spline.
-  Both GIDs must come from previous bridge calls.
 
 ## TimelineAiBridge
 
 TryCreateAsset(string name, out string timelineAssetName)
-  Creates a .playable Timeline asset at Assets/<name>.playable.
-  timelineAssetName (out) is a plain name string — required by all subsequent methods.
+  Creates a .playable asset at Assets/<name>.playable. Store timelineAssetName for all future calls.
   Name conflict → AWAITING_INPUT.
 
 CreatePlayableDirector(string vCamGlobalId, string timelineAssetName, out string directorGlobalId)
-  Creates a PlayableDirector GameObject (<vcamName>_Director) and binds the Timeline asset.
-  directorGlobalId (out) is required for all track methods.
+  Creates the scene's PlayableDirector. Store directorGlobalId — needed for every track method.
 
 CreateCinemachineTrack(string timelineAssetName, string brainGlobalId, string directorGlobalId)
-  Creates a CinemachineTrack on the Timeline and binds it to the CinemachineBrain.
-  brainGlobalId and directorGlobalId must be valid GID strings from previous calls.
+  Creates the ONE CinemachineTrack for the scene. Call this only once per scene.
 
 SetCinemachineTrack(string timelineAssetName, string trackName, string assignedCameraGlobalId, string directorGlobalId, float startTime, float duration)
-  Creates a CinemachineShot clip on the track and assigns the VCam.
-  trackName must exactly match the name given in CreateCinemachineTrack.
-  assignedCameraGlobalId and directorGlobalId must be valid GID strings from previous calls.
-  startTime and duration must be ≥ 0.
+  Adds a CinemachineShot to the existing track for the given time window.
+  trackName = "Cinemachine Track". startTime and duration must be ≥ 0.
 
 CreateAnimationTrack(string timelineAssetName, string animatedObjGlobalId, float startTime, float duration, string directorGlobalId)
-  Creates an AnimationTrack with an empty AnimationClip on the Timeline.
-  animatedObjGlobalId and directorGlobalId must be valid GID strings from previous calls.
-  Clip displayName: "Camera Animation". Internal clip name: "CameraAnim".
-  Adds Animator to animatedObj if not present.
+  Creates an AnimationTrack with an empty clip. displayName: "Camera Animation", clip name: "CameraAnim".
+  Adds Animator to animatedObj if missing.
 
 SetAnimationTrackLensDutch(string timelineAssetName, string trackName, string animationClipName, List<(float dutchValue, float clipTime)> trackPositions)
-  Sets an animation curve for Lens.Dutch.
-  dutchValue = Dutch angle in degrees, clipTime = time in seconds within the clip.
-  Minimum 2 keyframes recommended (start + end).
+  Sets animation curve for Lens.Dutch. dutchValue = degrees, clipTime = seconds in clip.
+  Use realistic time spans (e.g. 0→5s for a 5-second dutch effect). Min. 2 keyframes.
 
 SetAnimationTrackSplinePosition(string timelineAssetName, string trackName, string animationClipName, List<(float splinePosition, float clipTime)> trackPositions)
-  Sets an animation curve for the spline position.
-  splinePosition: 0.0 = spline start, 1.0 = spline end. clipTime = time in seconds within the clip.
-  Note: The parameter is named "dutchValue" in code but represents the spline position here.
+  Sets animation curve for spline position (0.0=start, 1.0=end).
+  Use realistic time spans matching the intended move duration. Min. 2 keyframes.
+  Note: parameter is named "dutchValue" in code but represents spline position.
 
 ---
 
 # Typical Usage Sequences
 
 ## Simple Cinemachine Shot
-
-1. AiCameraDirectorBridge.TryCreateVCam("ShotCam", targetGlobalId, out vCamGlobalId, out brainGlobalId)
-2. TimelineAiBridge.TryCreateAsset("ShotTimeline", out timelineAssetName)
-3. TimelineAiBridge.CreatePlayableDirector(vCamGlobalId, timelineAssetName, out directorGlobalId)
-4. TimelineAiBridge.CreateCinemachineTrack(timelineAssetName, brainGlobalId, directorGlobalId)
-5. TimelineAiBridge.SetCinemachineTrack(timelineAssetName, "Cinemachine Track", vCamGlobalId, directorGlobalId, 0f, 5f)
+1. TryCreateVCam("ShotCam", targetGlobalId, out vCamGlobalId, out brainGlobalId)
+2. TryCreateAsset("SceneTimeline", out timelineAssetName)
+3. CreatePlayableDirector(vCamGlobalId, timelineAssetName, out directorGlobalId)
+4. CreateCinemachineTrack(timelineAssetName, brainGlobalId, directorGlobalId)
+5. SetCinemachineTrack(timelineAssetName, "Cinemachine Track", vCamGlobalId, directorGlobalId, 0f, 5f)
 
 ## Spline-Dolly with Animated Position
-
-1. AiCameraDirectorBridge.TryCreateVCam("DollyCam", targetGlobalId, out vCamGlobalId, out brainGlobalId)
-2. AiCameraDirectorBridge.TryCreateSpline("DollyPath", [pos1, pos2, pos3], out splineGlobalId)
-3. AiCameraDirectorBridge.AddCameraDollyToSpline(splineGlobalId, vCamGlobalId)
-4. TimelineAiBridge.TryCreateAsset("DollyTimeline", out timelineAssetName)
-5. TimelineAiBridge.CreatePlayableDirector(vCamGlobalId, timelineAssetName, out directorGlobalId)
-6. TimelineAiBridge.CreateAnimationTrack(timelineAssetName, vCamGlobalId, 0f, 5f, directorGlobalId)
-7. TimelineAiBridge.SetAnimationTrackSplinePosition(timelineAssetName, "Camera Animation", "CameraAnim",
-     [(0f, 0f), (1f, 5f)])   // Spline start → end over 5 seconds
-
-## Example Flow (how it MUST look)
-
-User: "Create a dolly camera"
-
-AI: [calls TryCreateVCam → SUCCESS] ✓ TryCreateVCam successful
-    [calls TryCreateSpline → SUCCESS] ✓ TryCreateSpline successful
-    [calls AddCameraDollyToSpline → SUCCESS] ✓ AddCameraDollyToSpline successful
-    ... continues step by step until a non-SUCCESS status occurs.
-
-On AWAITING_INPUT:
-    [calls TryCreateVCam → AWAITING_INPUT]
-
-    🔵 BRIDGE AWAITING INPUT: TryCreateVCam
-    An object with this name already exists.
-
-    Please choose an option:
-      👉 OPTION_1: Override (will be recreated with '_OVERRIDE' suffix)
-      👉 OPTION_2: Cancel
-
-    [waits — does NOT choose itself]
+1. TryCreateVCam("DollyCam", targetGlobalId, out vCamGlobalId, out brainGlobalId)
+2. TryCreateSpline("DollyPath", [pos1, pos2, pos3], out splineGlobalId)
+3. AddCameraDollyToSpline(splineGlobalId, vCamGlobalId)
+4. TryCreateAsset("SceneTimeline", out timelineAssetName)
+5. CreatePlayableDirector(vCamGlobalId, timelineAssetName, out directorGlobalId)
+6. CreateCinemachineTrack(timelineAssetName, brainGlobalId, directorGlobalId)
+7. SetCinemachineTrack(timelineAssetName, "Cinemachine Track", vCamGlobalId, directorGlobalId, 0f, 8f)
+8. CreateAnimationTrack(timelineAssetName, vCamGlobalId, 0f, 8f, directorGlobalId)
+9. SetAnimationTrackSplinePosition(timelineAssetName, "Camera Animation", "CameraAnim", [(0f,0f),(1f,8f)])

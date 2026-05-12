@@ -46,12 +46,21 @@ public static class AiCameraDirectorBridge
         }
         
         var targetObj = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(targetGid);
+        
         Transform target = null;
-        if (targetObj is GameObject go) target = go.transform;
-        else if (targetObj is Component comp) target = comp.transform;
+        if (targetObj is GameObject go)
+        {
+            target = go.transform;
+        }
+        else if (targetObj is Component comp)
+        {
+            target = comp.transform;
+        }
 
         if (target == null)
+        {
             return "[[PROMPTRETURN]] FAILURE: Could not resolve a Transform from the provided targetGlobalId. Make sure the target GameObject exists in the currently open scene.";
+        }
 
         return CreateVCam(name, target, out vCamGlobalId, out brainGlobalId);
     }
@@ -67,20 +76,32 @@ public static class AiCameraDirectorBridge
 
         var brain = mainCam.GetComponent<CinemachineBrain>();
         if (brain == null)
+        {
             brain = mainCam.AddComponent<CinemachineBrain>();
+        }
 
         brainGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(brain).ToString();
 
         var vCamGo = new GameObject { name = name };
         var vCam = vCamGo.AddComponent<CinemachineCamera>();
         vCam.Target.TrackingTarget = target;
-        vCam.Target.LookAtTarget = target;
+        AddRotationTarget(vCam.transform);
         vCamGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(vCam).ToString();
 
         EditorUtility.SetDirty(vCam);
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(vCamGo.scene);
 
-        return "[[PROMPTRETURN]] Success";
+        return "[[PROMPTRETURN]] SUCCESS";
+    }
+
+    static void AddRotationTarget(Transform vCamTr)
+    {
+        var rotationComposer = vCamTr.AddComponent<CinemachineRotationComposer>();
+        rotationComposer.CenterOnActivate = true;
+        rotationComposer.Damping = new Vector2(.5f, .5f);
+        rotationComposer.Composition.HardLimits.Enabled = true;
+        rotationComposer.Composition.HardLimits.Size = new Vector2(0.8f, 0.8f);
+        // TODO: Can edit settings on rotation compose
     }
 
     // TODO: Could add closed option
@@ -119,10 +140,17 @@ public static class AiCameraDirectorBridge
             name = name
         };
         var splineContainer = splineGo.AddComponent<SplineContainer>();
-        var spline = splineContainer.Spline; // TODO: Relevant for closedloop if wanted
+        var spline = splineContainer.Spline;
         foreach (var curPosition in positionsInOrder)
         {
-            spline.Add(new BezierKnot(curPosition));
+            var knot = new BezierKnot(curPosition);
+            spline.Add(knot);
+        }
+        
+        // Glatte Tangenten berechnen
+        for (int i = 0; i < spline.Knots.Count(); i++)
+        {
+            spline.SetTangentMode(i, TangentMode.AutoSmooth);
         }
         splineContainerGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(splineContainer).ToString();
         return "[[PROMPTRETURN]] Success";

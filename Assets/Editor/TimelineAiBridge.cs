@@ -63,7 +63,6 @@ public static class TimelineAiBridge
         return GlobalObjectId.TryParse(cleanGid, out gid);
     }
 
-    // TODO: Convert name to id, because there can be two gameobjects with the same name
     /// <returns>The name of the created playable director in the scene</returns>
     public static string CreatePlayableDirector(string vCamGlobalIdString, string timelineName, out string directorGlobalId)
     {
@@ -102,16 +101,26 @@ public static class TimelineAiBridge
         }
 
         if (!TryParseGid(directorGlobalId, out var directorGid))
-            return "[[PROMPTRETURN]] FAILURE: The Global Object ID for the director you provided is not parsable: " + directorGlobalId;
+        {
+            return "[[PROMPTRETURN]] FAILURE: The Global Object ID for the director you provided is not parsable: " +
+                   directorGlobalId;
+        }
         var director = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(directorGid) as PlayableDirector;
         if (director == null)
+        {
             return "[[PROMPTRETURN]] FAILURE: The PlayableDirector from that GID is null or not a PlayableDirector";
+        }
 
         if (!TryParseGid(brainGlobalId, out var brainGid))
-            return "[[PROMPTRETURN]] FAILURE: The Global Object ID for the brain you provided is not parsable: " + brainGlobalId;
+        {
+            return "[[PROMPTRETURN]] FAILURE: The Global Object ID for the brain you provided is not parsable: " +
+                   brainGlobalId;
+        }
         var brain = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(brainGid) as CinemachineBrain;
         if (brain == null)
+        {
             return "[[PROMPTRETURN]] FAILURE: The CinemachineBrain from that GID is null or not a CinemachineBrain";
+        }
         
         // TODO: More descriptive name so we can have multiple tracks
         var cmTrack = timeline.CreateTrack<CinemachineTrack>(null, "Cinemachine Track");
@@ -136,16 +145,25 @@ public static class TimelineAiBridge
         }
 
         if (!TryParseGid(directorGlobalId, out var directorGid))
+        {
             return "[[PROMPTRETURN]] FAILURE: The Global Object ID for the director you provided is not parsable";
+        }
         var director = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(directorGid) as PlayableDirector;
         if (director == null)
+        {
             return "[[PROMPTRETURN]] FAILURE: The PlayableDirector from that GID is null";
+        }
 
         if (!TryParseGid(assignedCameraGlobalId, out var cameraGid))
-            return "[[PROMPTRETURN]] FAILURE: The Global Object ID for the assigned camera you provided is not parsable";
+        {
+            return
+                "[[PROMPTRETURN]] FAILURE: The Global Object ID for the assigned camera you provided is not parsable";
+        }
         var assignedCamera = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(cameraGid) as CinemachineCamera;
         if (assignedCamera == null)
+        {
             return "[[PROMPTRETURN]] FAILURE: The CinemachineCamera from that GID is null";
+        }
 
         var cmTrack = timeline.GetOutputTracks()
             .OfType<CinemachineTrack>()
@@ -168,9 +186,10 @@ public static class TimelineAiBridge
         var shotClip = cmTrack.CreateClip<CinemachineShot>();
         shotClip.start = startTime;
         shotClip.duration = duration;
-        
+
         var shot = shotClip.asset as CinemachineShot;
-        director.SetReferenceValue(shot!.VirtualCamera.exposedName, assignedCamera);
+        shot!.VirtualCamera.exposedName = new PropertyName(GUID.Generate().ToString());
+        director.SetReferenceValue(shot.VirtualCamera.exposedName, assignedCamera);
         
         EditorUtility.SetDirty(timeline);
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
@@ -179,10 +198,12 @@ public static class TimelineAiBridge
         
         return "[[PROMPTRETURN]] SUCCESS";
     }
-    
+
     /// <param name="timelineName">exact name of the timeline</param>
-    public static string CreateAnimationTrack(string timelineName, string animatedObjGlobalId, float startTime, float duration, string directorGlobalId)
+    /// <param name="animationTrackName">The Name of the created Animation Track</param>
+    public static string CreateAnimationTrack(string timelineName, string animatedObjGlobalId, float startTime, float duration, string directorGlobalId, out string animationTrackName)
     {
+        animationTrackName = string.Empty;
         if (!GetTimelineAsset(timelineName, out var timeline, out _))
         {
             return "[[PROMPTRETURN]] FAILURE: No Timeline-Asset found under this path";
@@ -222,7 +243,8 @@ public static class TimelineAiBridge
         director.SetGenericBinding(animTrack, animator);
     
         AnimationClip clip = new AnimationClip();
-        clip.name = animatedTransform.name;
+        animationTrackName = animatedTransform.name;
+        clip.name = animationTrackName;
         
         // order important
         // 1 add to timeline
@@ -240,7 +262,7 @@ public static class TimelineAiBridge
         EditorUtility.SetDirty(director);
         EditorUtility.SetDirty(timeline);
         AssetDatabase.SaveAssets();
-
+        
         return "[[PROMPTRETURN]] SUCCESS";
     }
 
@@ -309,13 +331,15 @@ public static class TimelineAiBridge
             .FirstOrDefault(e => e.displayName == animationClipName);
 
         if (clip == null)
-            return "Timeline Clip with the provided name wasnt found";
+        {
+            return "[[PROMPTRETURN]] FAILURE: Timeline Clip with the provided name wasnt found";
+        }
         
         var animClip = clip.animationClip;
         // "" means no parent
         if (animClip == null)
         {
-            Debug.LogError("Clip is Null");
+            return "[[PROMPTRETURN]] FAILURE: Animclip in Timeline Clip is null";
         }
         
         // TODO: If this doesnt work:
