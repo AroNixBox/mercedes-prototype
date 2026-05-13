@@ -85,6 +85,8 @@ public static class TimelineAiBridge
     /// <param name="timelineName">Name of the timeline asset</param>
     /// <param name="animationTrackName">the name of the already existing animation track that we want to add a new animation to</param>
     /// <param name="animationTimelineClipName">name of the animation timeline clip that we just created in the track. Is later used to identify the exact timeline clip to add the animation per curve to</param>
+    /// <param name="startTime">Absolute second on the Timeline where this clip starts (e.g. 8.0 = starts at second 8 of the Timeline). Duration extends forward from this point.</param>
+    /// <param name="duration">Length of the clip in seconds.</param>
     /// <returns>the name of the created animation track</returns>
     public static string AddAnimationToAnimationTrack(string timelineName, string animationTrackName, string animationName, float startTime, float duration, out string animationTimelineClipName)
     {
@@ -324,6 +326,8 @@ public static class TimelineAiBridge
     /// <param name="trackName">name of the cinemachine track</param>
     /// <param name="assignedCameraGlobalId">the virtual camera that is to be active in the track at the given time</param>
     /// <param name="directorGlobalId">global id of the director component</param>
+    /// <param name="startTime">Absolute second on the Timeline where this shot starts (e.g. 20.0 = starts at second 20 of the Timeline). Duration extends forward from this point.</param>
+    /// <param name="duration">Length of the shot in seconds.</param>
     public static string SetCinemachineTrack(string timelineName, string trackName, string assignedCameraGlobalId, string directorGlobalId, float startTime, float duration)
     {
         if (!GetTimelineAsset(timelineName, out var timeline, out _))
@@ -439,8 +443,9 @@ public static class TimelineAiBridge
     /// <param name="timelineName">the name of the timeline asset</param>
     /// <param name="audioTrackName">the audio track name that we want to add the audio clip to</param>
     /// <param name="audioClipFullPath">full assetpath of the audioclip we want to add</param>
+    /// <param name="startTime">Absolute second on the Timeline where this clip starts (e.g. 4.0 = starts at second 4 of the Timeline). Duration extends forward from this point.</param>
+    /// <param name="duration">Length of the clip in seconds.</param>
     /// <param name="audioTimelineClipName">returns the audio timeline clip name that we created, which you could use to access it later on</param>
-    /// <returns></returns>
     public static string AddAudioClipToAudioTrack(string timelineName, string audioTrackName,
         string audioClipFullPath, float startTime, float duration, out string audioTimelineClipName)
     {
