@@ -35,14 +35,14 @@ public static class AiCameraDirectorBridge
         if (vCams.Any(e => e.name == name) && !skipValidation)
         {
             // already existing vcam found (same name)
-            return "[[PROMPTRETURN]] AWAITING_INPUT: Override it? " +                                                         
-                   "OPTION_1: call TryCreateVCam again with the name + '_OVERRIDE'. " +                     
-                   "OPTION_2: stop and do nothing.";
+            return BridgeProtocol.AwaitingInput("A VCam with the name '" + name + "' already exists. Override it?",
+                "Call TryCreateVCam again with the name + '_OVERRIDE'",
+                "Stop and do nothing");
         }
 
         if (!TryParseGid(targetGlobalIdString, out var targetGid))
         {
-            return "[[PROMPTRETURN]] FAILURE: the passed in targetgid is not parsable: " + targetGlobalIdString;
+            return BridgeProtocol.Failure("the passed in targetGlobalId is not parsable: " + targetGlobalIdString);
         }
         
         var targetObj = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(targetGid);
@@ -59,7 +59,7 @@ public static class AiCameraDirectorBridge
 
         if (target == null)
         {
-            return "[[PROMPTRETURN]] FAILURE: Could not resolve a Transform from the provided targetGlobalId. Make sure the target GameObject exists in the currently open scene.";
+            return BridgeProtocol.Failure("Could not resolve a Transform from the provided targetGlobalId. Make sure the target GameObject exists in the currently open scene.");
         }
 
         return CreateVCam(name, target, out vCamGlobalId, out brainGlobalId);
@@ -91,7 +91,7 @@ public static class AiCameraDirectorBridge
         EditorUtility.SetDirty(vCam);
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(vCamGo.scene);
 
-        return "[[PROMPTRETURN]] SUCCESS";
+        return BridgeProtocol.SUCCESS;
     }
 
     static void AddRotationTarget(Transform vCamTr)
@@ -119,9 +119,9 @@ public static class AiCameraDirectorBridge
         if (splines.Any(e => e.name == name) && !skipValidation)
         {
             // already existing vcam found (same name)
-            return "[[PROMPTRETURN]] Ask the user: Override it? " +                                                         
-                   "If yes: call TryCreateSpline again with the name + '_OVERRIDE'. " +                     
-                   "If no: stop and do nothing.";
+            return BridgeProtocol.AwaitingInput("A Spline with the name '" + name + "' already exists. Override it?",
+                "Call TryCreateSpline again with the name + '_OVERRIDE'",
+                "Stop and do nothing");
         }
 
         return CreateSpline(name, positionsInOrder, out splineContainerGlobalId);
@@ -132,7 +132,7 @@ public static class AiCameraDirectorBridge
         splineContainerGlobalId = string.Empty;
         if (positionsInOrder is { Count: < 1 })
         {
-            return "[[PROMPTRETURN]] Failure: You tried creting a spline without knots";
+            return BridgeProtocol.Failure("You tried creating a spline without knots. Provide at least 1 position.");
         }
 
         var splineGo = new GameObject
@@ -153,35 +153,35 @@ public static class AiCameraDirectorBridge
             spline.SetTangentMode(i, TangentMode.AutoSmooth);
         }
         splineContainerGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(splineContainer).ToString();
-        return "[[PROMPTRETURN]] Success";
+        return BridgeProtocol.SUCCESS;
     }
 
     public static string AddCameraDollyToSpline(string containerGlobalIdString, string vCamGlobalIdString)
     {
         if (!TryParseGid(containerGlobalIdString, out var containerGid))
         {
-            return "[[PROMPTRETURN]] Failure: The Global Object ID for the container you provided is not parsable";
+            return BridgeProtocol.Failure("The Global Object ID for the container you provided is not parsable.");
         }
         var container = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(containerGid) as SplineContainer;
         if (container == null)
         {
-            return "[[PROMPTRETURN]] Failure: The Container from that GID is null";
+            return BridgeProtocol.Failure("The SplineContainer from that GID is null.");
         }
 
         if (!TryParseGid(vCamGlobalIdString, out var vCamGid))
         {
-            return "[[PROMPTRETURN]] Failure: The Global Object ID for the vcam you provided is not parsable";
+            return BridgeProtocol.Failure("The Global Object ID for the VCam you provided is not parsable.");
         }
 
         var vCam = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(vCamGid) as CinemachineCamera;
         if (vCam == null)
         {
-            return "[[PROMPTRETURN]] Failure: The CinemachineCamera from that GID is null";
+            return BridgeProtocol.Failure("The CinemachineCamera from that GID is null.");
         }
 
         var dolly = vCam.gameObject.AddComponent<CinemachineSplineDolly>();
         dolly.Spline = container;
         
-        return "[[PROMPTRETURN]] Success";
+        return BridgeProtocol.SUCCESS;
     }
 }

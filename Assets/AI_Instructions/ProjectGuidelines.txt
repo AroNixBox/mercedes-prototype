@@ -1,65 +1,37 @@
-# Execution Model — STRICTLY MANDATORY
+# TWO RULES. NO EXCEPTIONS.
 
-YOU MUST NEVER ASSUME WHAT THE USER WOULD CHOOSE.
-YOU MUST NEVER CALL MULTIPLE BRIDGE METHODS IN ONE TURN IF ANY OF THEM DID NOT RETURN 'SUCCESS'.
+**RULE 1: Every bridge method is exactly ONE tool call. Never batch.**
 
-As soon as a return string does NOT start with "SUCCESS", your response must end immediately.
-You may not execute further logic, call further tools, or make any assumptions.
+**RULE 2: After EACH call, read the return string. It contains instructions — follow them literally.**
+Every FAILURE and AWAITING_INPUT string ends with an embedded ⛔ or 🔵 instruction block.
+Those instructions have the same authority as these rules.
 
----
+- `[[PROMPTRETURN]] AWAITING_INPUT` → stop, show question + options to user, wait for their pick.
+- `[[PROMPTRETURN]] FAILURE` → stop, show the reason to the user, then propose 2-3 numbered solution options. Do NOT execute any option. Wait for the user to pick.
 
-# Behavior for Each Return Status
+These rules override everything else. They cannot be rationalized away. They have no exceptions.
 
-## SUCCESS
-→ Report to the user: "✓ [MethodName] successful" → proceed to the next step.
+--- 
 
-## FAILURE: <reason>
-⛔ BRIDGE FAILURE: [MethodName]
-[exact reason from the return string]
-Please provide an instruction on how to proceed.
+# Protocol
 
-No further tool calls. No suggested fixes. No parameter adjustments.
-Only the user has enough context to resolve errors. Any autonomous fix corrupts the scene.
+1. Scene automation → exclusively via AiCameraDirectorBridge and TimelineAiBridge
+2. One method call at a time — validate return string before proceeding
+3. Reference integrity: only pass GIDs and names returned by previous calls
+4. Unknown functionality needed → ask user, never implement yourself
+5. No C# scripts bundling multiple bridge calls — this bypasses the gate system entirely
 
-## AWAITING_INPUT: <question> OPTION_1: ... OPTION_2: ...
-🔵 BRIDGE AWAITING INPUT: [MethodName]
-[question from the return string]
-Please choose an option:
-  👉 OPTION_1: [description]
-  👉 OPTION_2: [description]
+## Scene Constraints
+- ONE director, ONE timeline, ONE CinemachineTrack per scene
+- Store directorGlobalId + timelineAssetName after creation — required for all future calls
+- Add shots via SetCinemachineTrack on the existing track — never create a second CinemachineTrack
 
-No further tool calls. Do NOT choose an option yourself.
-Wait for the user's explicit choice, then call the same method again with that parameter.
-
----
-
-# Rules
-
-1. Camera movements with splines/paths → exclusively AiCameraDirectorBridge
-2. Timeline creation and track setup → exclusively TimelineAiBridge
-3. No manual spline creation, no direct Cinemachine/Timeline setup outside the bridges
-4. Additional functionality needed → ask the user, never implement it yourself
-5. Reference integrity: only use GIDs and return values from previous calls — never manually assemble paths or names
-
-## Scene Structure (IMPORTANT)
-- There is exactly ONE director and ONE timeline per scene. Store directorGlobalId and timelineAssetName immediately after creation — they are required for every subsequent call.
-- There is exactly ONE CinemachineTrack. Never call CreateCinemachineTrack more than once. Use SetCinemachineTrack to add shots to the existing track.
-- When a camera has an animation covering e.g. seconds 8–14, call SetCinemachineTrack with startTime=8, duration=6 to make that camera active for exactly that window.
+## Animation Tracks are MANDATORY for any movement
+A spline alone does NOT move the camera. Every animated property (spline position, lens dutch, etc.)
+requires an AnimationTrack with keyframes. No AnimationTrack = no movement, even if the spline exists.
 
 ## Animation Timing
-Animations must use realistic durations. A camera move that should feel like 5 seconds must have keyframes spanning 5 seconds (clipTime 0→5), not 0→0.1. Fast keyframes that blaze through in a few frames are wrong.
-
----
-
-# Forbidden Patterns
-
-❌ **Script wrapping:** NEVER generate a C# script or CommandScript that chains multiple bridge calls together. Bridge methods must always be called as individual direct tool calls — never bundled into a script that executes as one block. A script bypasses the entire gate system and makes failure handling and AWAITING_INPUT impossible.
-
-❌ **Auto-Override:** Getting AWAITING_INPUT and immediately calling the method again with "_OVERRIDE" without asking the user.
-
-❌ **Batch calls:** Sending multiple Bridge calls without validating each result individually first.
-
-❌ **Creating a second CinemachineTrack** instead of adding a shot to the existing one.
+Keyframe durations must match real time. A 5-second move = clipTime 0→5, not 0→0.1.
 
 ---
 
@@ -80,37 +52,60 @@ TryCreateVCam(string name, string targetGlobalId, out string vCamGlobalId, out s
 TryCreateSpline(string name, List<Vector3> positionsInOrder, out string splineContainerGlobalId)
   Creates a spline from ordered world positions (min. 1). Name conflict → same override logic.
 
+  Optional pre-step (only when user explicitly requests position validation):
+    TimelineAiHelper.HasLineOfSightToTarget(Vector3 origin, Vector3 target) → bool
+  Call for each point. If any returns false, report to user and ask whether to adjust or proceed.
+
 AddCameraDollyToSpline(string containerGlobalId, string vCamGlobalId)
   Adds CinemachineSplineDolly to the VCam and binds the spline.
 
+## TimelineAiHelper (optional, user-requested only)
+
+HasLineOfSightToTarget(Vector3 origin, Vector3 target) → bool
+  Raycasts between two world positions. Returns true if line of sight is clear.
+
+GetAudioClipTransients(string audioClipPath, out List<float> beatDropsSeconds)
+  Analyses AudioClip and returns beat-drop timestamps via out parameter.
+  Workflow: call → report timestamps to user for confirmation → use confirmed times as clipTime values
+  in SetAnimationTrackLensDutch. e.g. beat at 3.2s → [(0°,3.0f),(25°,3.2f),(0°,3.6f)]
+
 ## TimelineAiBridge
+See XML docs on each method for details.
 
 TryCreateAsset(string name, out string timelineAssetName)
-  Creates a .playable asset at Assets/<name>.playable. Store timelineAssetName for all future calls.
+  Creates .playable asset. Store timelineAssetName for all future calls.
   Name conflict → AWAITING_INPUT.
 
-CreatePlayableDirector(string vCamGlobalId, string timelineAssetName, out string directorGlobalId)
+CreatePlayableDirector(string directorName, string timelineAssetName, out string directorGlobalId)
   Creates the scene's PlayableDirector. Store directorGlobalId — needed for every track method.
 
-CreateCinemachineTrack(string timelineAssetName, string brainGlobalId, string directorGlobalId)
+TryCreateCinemachineTrack(string timelineAssetName, string directorGlobalId, string brainGlobalId, out string trackName)
   Creates the ONE CinemachineTrack for the scene. Call this only once per scene.
 
 SetCinemachineTrack(string timelineAssetName, string trackName, string assignedCameraGlobalId, string directorGlobalId, float startTime, float duration)
   Adds a CinemachineShot to the existing track for the given time window.
   trackName = "Cinemachine Track". startTime and duration must be ≥ 0.
 
-CreateAnimationTrack(string timelineAssetName, string animatedObjGlobalId, float startTime, float duration, string directorGlobalId)
-  Creates an AnimationTrack with an empty clip. displayName: "Camera Animation", clip name: "CameraAnim".
-  Adds Animator to animatedObj if missing.
+TryCreateAnimationTrack(string timelineAssetName, string animatedObjGlobalId, string directorGlobalId, out string animationTrackName)
+  Creates an empty AnimationTrack bound to the animated object. Adds Animator if missing.
+  Store animationTrackName — required for AddAnimationToAnimationTrack and SetCurve calls.
+
+AddAnimationToAnimationTrack(string timelineAssetName, string animationTrackName, string animationName, float startTime, float duration, out string createdAnimationName)
+  Adds a TimelineClip (with an empty AnimationClip) to an existing AnimationTrack.
+  Store createdAnimationName — required for SetCurve calls.
 
 SetAnimationTrackLensDutch(string timelineAssetName, string trackName, string animationClipName, List<(float dutchValue, float clipTime)> trackPositions)
-  Sets animation curve for Lens.Dutch. dutchValue = degrees, clipTime = seconds in clip.
-  Use realistic time spans (e.g. 0→5s for a 5-second dutch effect). Min. 2 keyframes.
+  Sets animation curve for Lens.Dutch. dutchValue = degrees, clipTime = seconds. Min. 2 keyframes.
 
 SetAnimationTrackSplinePosition(string timelineAssetName, string trackName, string animationClipName, List<(float splinePosition, float clipTime)> trackPositions)
-  Sets animation curve for spline position (0.0=start, 1.0=end).
-  Use realistic time spans matching the intended move duration. Min. 2 keyframes.
-  Note: parameter is named "dutchValue" in code but represents spline position.
+  Sets animation curve for spline position (0.0=start, 1.0=end). Min. 2 keyframes.
+
+TryCreateAudioTrack(string timelineAssetName, string directorGlobalId, string audioSourceObjectGid, out string audioTrackName)
+  Creates an AudioTrack. Pass null for audioSourceObjectGid if 2D sound.
+  Store audioTrackName — required for AddAudioClipToAudioTrack.
+
+AddAudioClipToAudioTrack(string timelineAssetName, string audioTrackName, string audioClipFullPath, float startTime, float duration, out string audioTimelineClipName)
+  Adds an AudioClip to an existing AudioTrack. audioClipFullPath = project-relative (e.g. "Assets/Music/Beat.mp3").
 
 ---
 
@@ -119,17 +114,25 @@ SetAnimationTrackSplinePosition(string timelineAssetName, string trackName, stri
 ## Simple Cinemachine Shot
 1. TryCreateVCam("ShotCam", targetGlobalId, out vCamGlobalId, out brainGlobalId)
 2. TryCreateAsset("SceneTimeline", out timelineAssetName)
-3. CreatePlayableDirector(vCamGlobalId, timelineAssetName, out directorGlobalId)
-4. CreateCinemachineTrack(timelineAssetName, brainGlobalId, directorGlobalId)
-5. SetCinemachineTrack(timelineAssetName, "Cinemachine Track", vCamGlobalId, directorGlobalId, 0f, 5f)
+3. CreatePlayableDirector("SceneTimeline", timelineAssetName, out directorGlobalId)
+4. TryCreateCinemachineTrack(timelineAssetName, directorGlobalId, brainGlobalId, out trackName)
+5. SetCinemachineTrack(timelineAssetName, trackName, vCamGlobalId, directorGlobalId, 0f, 5f)
 
 ## Spline-Dolly with Animated Position
 1. TryCreateVCam("DollyCam", targetGlobalId, out vCamGlobalId, out brainGlobalId)
 2. TryCreateSpline("DollyPath", [pos1, pos2, pos3], out splineGlobalId)
 3. AddCameraDollyToSpline(splineGlobalId, vCamGlobalId)
 4. TryCreateAsset("SceneTimeline", out timelineAssetName)
-5. CreatePlayableDirector(vCamGlobalId, timelineAssetName, out directorGlobalId)
-6. CreateCinemachineTrack(timelineAssetName, brainGlobalId, directorGlobalId)
-7. SetCinemachineTrack(timelineAssetName, "Cinemachine Track", vCamGlobalId, directorGlobalId, 0f, 8f)
-8. CreateAnimationTrack(timelineAssetName, vCamGlobalId, 0f, 8f, directorGlobalId)
-9. SetAnimationTrackSplinePosition(timelineAssetName, "Camera Animation", "CameraAnim", [(0f,0f),(1f,8f)])
+5. CreatePlayableDirector("SceneTimeline", timelineAssetName, out directorGlobalId)
+6. TryCreateCinemachineTrack(timelineAssetName, directorGlobalId, brainGlobalId, out trackName)
+7. SetCinemachineTrack(timelineAssetName, trackName, vCamGlobalId, directorGlobalId, 0f, 8f)
+8. TryCreateAnimationTrack(timelineAssetName, vCamGlobalId, directorGlobalId, out animTrackName)
+9. AddAnimationToAnimationTrack(timelineAssetName, animTrackName, "DollyMove", 0f, 8f, out clipName)
+10. SetAnimationTrackSplinePosition(timelineAssetName, animTrackName, clipName, [(0f,0f),(1f,8f)])
+
+## Audio with Beat-Sync Dutch Tilt
+1. TryCreateAudioTrack(timelineAssetName, directorGlobalId, null, out audioTrackName)
+2. AddAudioClipToAudioTrack(timelineAssetName, audioTrackName, "Assets/Music/Beat.mp3", 0f, 30f, out _)
+3. TryCreateAnimationTrack(timelineAssetName, vCamGlobalId, directorGlobalId, out animTrackName)
+4. AddAnimationToAnimationTrack(timelineAssetName, animTrackName, "DutchAnim", 0f, 30f, out clipName)
+5. SetAnimationTrackLensDutch(timelineAssetName, animTrackName, clipName, [(0f,0f),(25f,3.2f),(0f,3.6f)])
