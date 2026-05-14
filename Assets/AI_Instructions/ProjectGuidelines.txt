@@ -33,6 +33,12 @@ requires an AnimationTrack with keyframes. No AnimationTrack = no movement, even
 ## Animation Timing
 Keyframe durations must match real time. A 5-second move = clipTime 0→5, not 0→0.1.
 
+## Blend Hint (Shot Transitions)
+Place a blend frame at the last spline point of a shot and the first of the next:
+position the camera 15–35 cm in front of a vehicle surface, forward vector perpendicular to it.
+Verify with TimelineAiHelper.DistanceToForwardCollision(camPos, camForward) — must return 0.15–0.35.
+Both sides of a cut share this framing → viewer reads it as a seamless transition.
+
 ---
 
 # API Reference
@@ -63,6 +69,11 @@ AddCameraDollyToSpline(string containerGlobalId, string vCamGlobalId)
 
 HasLineOfSightToTarget(Vector3 origin, Vector3 target) → bool
   Raycasts between two world positions. Returns true if line of sight is clear.
+  Use this to validate spline segments: call for each consecutive point pair before finalizing the path.
+  If false, the camera would clip through geometry — insert an intermediate point to route around it.
+
+DistanceToForwardCollision(Vector3 origin, Vector3 forward) → float?
+  Raycasts forward from origin. Returns distance to first hit, or null if nothing hit within 100m.
 
 GetAudioClipTransients(string audioClipPath, out List<float> beatDropsSeconds)
   Analyses AudioClip and returns beat-drop timestamps via out parameter.

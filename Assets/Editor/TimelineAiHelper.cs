@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Unity.Collections;
 using UnityEditor;
 using UnityEngine;
@@ -18,73 +19,81 @@ namespace Editor
             return !Physics.Raycast(origin, toTarget.normalized, distance);
         }
         
-        // Analysiert den Clip und gibt die Zeiten (in Sekunden) der markantesten Beat-Drops zurück.
-        public static string GetAudioClipTransients(string audioClipPath, out List<float> beatDropsSeconds)
+        /// <returns>The distance to the forward collision or null if nothing hit</returns>
+        public static float? DistanceToForwardCollision(Vector3 origin, Vector3 forward)
         {
-            beatDropsSeconds = new List<float>();
+            if (!Physics.Raycast(origin, forward, out var hit, 100f))
+            {
+                return null;
+            }
+
+            return hit.distance;
+        }
+        ///<summary>Analyzes the beat and returns times (in seconds) with intensity</summary>
+        ///<returns> Item1 = timestamp in seconds, Item2 = normalized intensity 0–1 relative to strongest beat.</returns>
+        public static string GetAudioClipTransients(string audioClipPath, out List<(float time, float intensity)> beatDrops)
+        {
+            beatDrops = new List<(float, float)>();
             if (!TryGetAudioClip(audioClipPath, out var clip))
             {
                 return BridgeProtocol.Failure("No AudioClip could be loaded from path: " + audioClipPath);
             }
-            // 1. Audiodaten auslesen (float[] funktioniert nativ mit GetData)
+            // read audiodata
             var numSamples = clip.samples * clip.channels;
             float[] samples = new float[numSamples];
-            
+
             if (!clip.GetData(samples, 0))
             {
                 return BridgeProtocol.Failure("Could not read audio data from clip.");
             }
 
-            // 2. Konfiguration für die Beat-Erkennung
-            int windowSize = 1024 * clip.channels; // Analyse-Fenstergröße (~0.02 Sekunden)
-            float minTimeBetweenBeats = 0.2f;      // Cooldown in Sekunden (verhindert hunderte Hits beim selben Drop)
-            float thresholdMultiplier = 2.5f;      // WIE STARK muss der Drop sein? (Größer = nur die absolut lautesten)
-            float noiseFloor = 0.05f;              // Grundlautstärke, die überschritten werden muss
-            
-            // Historie für die Ermittlung der Durchschnittslautstärke
+            // beat recognition config
+            int windowSize = 1024 * clip.channels;
+            float minTimeBetweenBeats = 0.2f;
+            float thresholdMultiplier = 2.5f;
+            float noiseFloor = 0.05f;
+
             Queue<float> energyHistory = new Queue<float>();
             float energyHistorySum = 0f;
-            int historySize = 43; // Historie der letzten ~1 Sekunde
+            int historySize = 43;
 
             float lastBeatTime = -minTimeBetweenBeats;
+            var rawBeats = new List<(float time, float energy)>();
 
-            // 3. Durch das Audio gehen in Blöcken (Windows)
+            // 3. go throgh audio
             for (int i = 0; i < samples.Length - windowSize; i += windowSize)
             {
-                // Energie des aktuellen Blocks berechnen (RMS/Squared)
                 float currentEnergy = 0f;
                 for (int j = 0; j < windowSize; j++)
-                {
-                    // Quadrieren macht Spitzen (Laute Töne) noch deutlicher
-                    currentEnergy += samples[i + j] * samples[i + j]; 
-                }
+                    currentEnergy += samples[i + j] * samples[i + j];
                 currentEnergy /= windowSize;
 
-                // Durchschnitt der bisherigen Audio-Historie
                 float avgMemoryEnergy = energyHistory.Count > 0 ? (energyHistorySum / energyHistory.Count) : 0.01f;
 
-                // 4. BEAT CHECK: Ist die Energie hier VIEL höher als im Durchschnitt?
                 if (currentEnergy > (avgMemoryEnergy * thresholdMultiplier) && currentEnergy > noiseFloor)
                 {
-                    // Index (Sample) in Sekunden umrechnen
                     float timeInSeconds = (float)i / (clip.frequency * clip.channels);
 
-                    // Checken ob der letzte Beat weit genug weg ist (Cooldown)
                     if (timeInSeconds - lastBeatTime >= minTimeBetweenBeats)
                     {
-                        beatDropsSeconds.Add(timeInSeconds);
+                        rawBeats.Add((timeInSeconds, currentEnergy));
                         lastBeatTime = timeInSeconds;
                     }
                 }
 
-                // 5. Historie updaten (Ringpuffer)
                 energyHistory.Enqueue(currentEnergy);
                 energyHistorySum += currentEnergy;
                 if (energyHistory.Count > historySize)
-                {
                     energyHistorySum -= energyHistory.Dequeue();
-                }
             }
+
+            // normalize intensity
+            if (rawBeats.Count == 0)
+                return BridgeProtocol.SUCCESS;
+
+            float maxEnergy = rawBeats.Max(b => b.energy);
+            foreach (var (time, energy) in rawBeats)
+                beatDrops.Add((time, energy / maxEnergy));
 
             return BridgeProtocol.SUCCESS;
         }

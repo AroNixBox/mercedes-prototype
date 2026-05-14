@@ -19,29 +19,37 @@ using UnityEditor;
 // Scene GameObjects are returned as their Type
 public static class TimelineAiBridge
 {
-    const string FolderPath = "Assets";
-    const string Format = "playable";
-
-
     /// <param name="name">name of the timeline asset. This will be relevant to all other method calls, since they need to query the asset</param>
     /// <param name="timelineAssetName">the name of the created asset</param>
     public static string TryCreateTimelineAsset(string name, out string timelineAssetName)
     {
         timelineAssetName = string.Empty;
-        var skipValidation = name.Contains("_OVERRIDE");
-        if (skipValidation)
+        var overrideCall = name.Contains("_OVERRIDE");
+        if (overrideCall)
         {
             name = name.Replace("_OVERRIDE", "");
         }
+        
+        var exists = GetTimelineAsset(name, out _, out var fullPath);
 
-        if (GetTimelineAsset(name, out _, out var fullPath) && !skipValidation)
+        // no override call but asset exists -> report override request!
+        if (exists && !overrideCall)
         {
-            // already existing timeline-asset found (same name)
-            return BridgeProtocol.AwaitingInput("A Timeline asset with the name '" + name + "' already exists. Override it?",
+            return BridgeProtocol.AwaitingInput(
+                $"A Timeline asset with the name '{name}' already exists. Override it?",
                 "Call TryCreateAsset again with the name + '_OVERRIDE'",
                 "Stop and do nothing");
         }
-
+  
+        // override call
+        if (exists && overrideCall)
+        {
+            AssetDatabase.DeleteAsset(fullPath);
+            timelineAssetName = name;
+            return CreateTimelineAsset(fullPath);
+        }
+  
+        // doesnt exist yet, create ;)
         timelineAssetName = name;
         return CreateTimelineAsset(fullPath);
     }
@@ -54,7 +62,9 @@ public static class TimelineAiBridge
     }
     static bool GetTimelineAsset(string name, out TimelineAsset timelineAsset, out string fullPath)
     {
-        fullPath = $"{FolderPath}/{name}.{Format}";
+        const string folderPath = "Assets";
+        const string format = "playable";
+        fullPath = $"{folderPath}/{name}.{format}";
         timelineAsset = AssetDatabase.LoadAssetAtPath<TimelineAsset>(fullPath);
         return timelineAsset != null;
     }
