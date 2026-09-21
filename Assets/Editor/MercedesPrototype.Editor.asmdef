@@ -1,0 +1,12 @@
+{
+    "name": "MercedesPrototype.Editor",
+    "references": [
+        "Unity.Cinemachine",
+        "Unity.Splines",
+        "Unity.Mathematics",
+        "Unity.Timeline",
+        "Unity.AI.Assistant.Runtime"
+    ],
+    "includePlatforms": [ "Editor" ],
+    "autoReferenced": true
+}

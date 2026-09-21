@@ -5,8 +5,8 @@ using UnityEngine;
 using UnityEngine.Timeline;
 using UnityEngine.Playables;
 using Unity.Cinemachine;
-using Unity.VisualScripting;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 
 // TODO:
 // Verbote sollten IMMER von den Methoden mitgeprüft werden, beispiel: was passiert wenn wir ein cinemachine asset überschreiben? DAS MUSS GEHANDLED WERDEN!
@@ -69,6 +69,17 @@ public static class TimelineAiBridge
         return timelineAsset != null;
     }
 
+    internal static TimelineAsset GetOrCreateTimelineAsset(string name)
+    {
+        if (GetTimelineAsset(name, out var timeline, out var fullPath))
+        {
+            return timeline;
+        }
+        CreateTimelineAsset(fullPath);
+        GetTimelineAsset(name, out timeline, out _);
+        return timeline;
+    }
+
     static bool TryParseGid(string gidString, out GlobalObjectId gid)
     {
         if (string.IsNullOrEmpty(gidString))
@@ -118,21 +129,33 @@ public static class TimelineAiBridge
             return BridgeProtocol.Failure("No AnimationTrack named '" + animationTrackName + "' found on the timeline.");
         }
         
-        AnimationClip clip = new AnimationClip();
-        // TODO: Could give the clip a name to be idenfied in the assetdatabase.
-        
-        // 2 create clip
-        AssetDatabase.AddObjectToAsset(clip, timeline);
-        var animClip = animationTrack.CreateClip(clip);
-        animClip.start = startTime;
-        animClip.duration = duration;
-        animClip.displayName = animationName;
+        AddAnimationClip(timeline, animationTrack, animationName, startTime, duration);
         animationTimelineClipName = animationName; // set to the same name that was put in to remind the agent: hey this is what you passed in
+        return BridgeProtocol.SUCCESS;
+    }
+
+    internal static TimelineClip AddAnimationClip(TimelineAsset timeline, AnimationTrack track, string displayName, double start, double duration)
+    {
+        var clip = new AnimationClip { name = displayName };
+        AssetDatabase.AddObjectToAsset(clip, timeline);
+        var timelineClip = track.CreateClip(clip);
+        timelineClip.start = start;
+        timelineClip.duration = duration;
+        timelineClip.displayName = displayName;
 
         EditorUtility.SetDirty(clip);
         EditorUtility.SetDirty(timeline);
         AssetDatabase.SaveAssets();
-        return BridgeProtocol.SUCCESS;
+        return timelineClip;
+    }
+
+    internal static void SetClipCurve(TimelineAsset timeline, AnimationClip clip, System.Type componentType, string propertyName, AnimationCurve curve)
+    {
+        // "" means no parent
+        clip.SetCurve("", componentType, propertyName, curve);
+        EditorUtility.SetDirty(clip);
+        EditorUtility.SetDirty(timeline); // because animclip is subasset of timeline
+        AssetDatabase.SaveAssets();
     }
     
     /// <param name="timelineName">Name of the timeline asset</param>
@@ -230,20 +253,21 @@ public static class TimelineAiBridge
         return BridgeProtocol.SUCCESS;
     }
 
-    static void CreateTrack<T>(TimelineAsset timeline, PlayableDirector director, string newTrackName, [CanBeNull] UnityEngine.Object trackReference) where T : TrackAsset, new()
+    internal static T CreateTrack<T>(TimelineAsset timeline, PlayableDirector director, string newTrackName, [CanBeNull] UnityEngine.Object trackReference) where T : TrackAsset, new()
     {
         var track = timeline.CreateTrack<T>(null, newTrackName);
-        
+
         // the created track needs a scene reference -> thats what we set here:
         if (trackReference != null)
         {
             director.SetGenericBinding(track, trackReference);
         }
         // object change in scene only needs to be marked dirty, can be saved manually from user.
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
+        EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
         // asset needs to be marked dirty and saved
         EditorUtility.SetDirty(timeline);
         AssetDatabase.SaveAssets();
+        return track;
     }
 
     /// <param name="directorName">Name that the director should have, "_Director" will be appended</param>
@@ -258,14 +282,19 @@ public static class TimelineAiBridge
             return BridgeProtocol.Failure("No Timeline-Asset found under this path: " + timelineName);
         }
 
+        var director = CreateDirector(directorName, timeline);
+        directorGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(director).ToString();
+        return BridgeProtocol.SUCCESS;
+    }
+
+    internal static PlayableDirector CreateDirector(string directorName, TimelineAsset timeline)
+    {
         var directorGo = new GameObject(directorName + "_Director");
+        Undo.RegisterCreatedObjectUndo(directorGo, "Create Director");
         var director = directorGo.AddComponent<PlayableDirector>();
         director.playableAsset = timeline;
-        
-        directorGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(director).ToString();
-        
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
-        return BridgeProtocol.SUCCESS;
+        EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
+        return director;
     }
 
     /// <param name="timelineName">name of the timeline asset</param>
@@ -321,11 +350,7 @@ public static class TimelineAiBridge
             return BridgeProtocol.Failure("The AnimationClip is null.");
         }
         
-        animClip.SetCurve("", typeof(T), propertyName, curve);
-
-        EditorUtility.SetDirty(animClip);
-        EditorUtility.SetDirty(timeline); // because animclip is subasset of timeline
-        AssetDatabase.SaveAssets();
+        SetClipCurve(timeline, animClip, typeof(T), propertyName, curve);
 
         return BridgeProtocol.SUCCESS;
     }
@@ -379,19 +404,25 @@ public static class TimelineAiBridge
             return BridgeProtocol.Failure("startTime must be >= 0.");
         }
 
-        var shotClip = cmTrack.CreateClip<CinemachineShot>();
-        shotClip.start = startTime;
-        shotClip.duration = duration;
-
-        var shot = shotClip.asset as CinemachineShot;
-        shot!.VirtualCamera.exposedName = new PropertyName(GUID.Generate().ToString());
-        director.SetReferenceValue(shot.VirtualCamera.exposedName, assignedCamera);
-
-        EditorUtility.SetDirty(timeline);
-        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
-        AssetDatabase.SaveAssets();
+        AddShotClip(timeline, cmTrack, director, assignedCamera, startTime, duration);
 
         return BridgeProtocol.SUCCESS;
+    }
+
+    internal static TimelineClip AddShotClip(TimelineAsset timeline, CinemachineTrack track, PlayableDirector director, CinemachineCamera cam, double start, double duration)
+    {
+        var shotClip = track.CreateClip<CinemachineShot>();
+        shotClip.start = start;
+        shotClip.duration = duration;
+
+        var shot = (CinemachineShot)shotClip.asset;
+        shot.VirtualCamera.exposedName = new PropertyName(GUID.Generate().ToString());
+        director.SetReferenceValue(shot.VirtualCamera.exposedName, cam);
+
+        EditorUtility.SetDirty(timeline);
+        EditorSceneManager.MarkSceneDirty(director.gameObject.scene);
+        AssetDatabase.SaveAssets();
+        return shotClip;
     }
 
     /// <param name="timelineName">exact name of the timeline</param>
@@ -433,7 +464,7 @@ public static class TimelineAiBridge
 
             if (!audioSourceHolder.TryGetComponent(out clipSource))
             {
-                clipSource = audioSourceHolder.AddComponent<AudioSource>();
+                clipSource = audioSourceHolder.gameObject.AddComponent<AudioSource>();
             }
 
             audioTrackName = clipSource.gameObject.name;

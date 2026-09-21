@@ -1,0 +1,19 @@
+{
+    "name": "CarCam.Tests",
+    "rootNamespace": "CarCam.Tests",
+    "references": [
+        "MercedesPrototype.Editor",
+        "Unity.Cinemachine",
+        "Unity.Splines",
+        "Unity.Mathematics",
+        "Unity.Timeline",
+        "Unity.AI.Assistant.Runtime",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [ "Editor" ],
+    "overrideReferences": true,
+    "precompiledReferences": [ "nunit.framework.dll" ],
+    "autoReferenced": false,
+    "defineConstraints": [ "UNITY_INCLUDE_TESTS" ]
+}

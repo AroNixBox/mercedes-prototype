@@ -3,7 +3,6 @@ using Unity.Cinemachine;
 using UnityEngine.Splines;
 using System.Collections.Generic;
 using System.Linq;
-using Unity.VisualScripting;
 using UnityEditor;
 
 public static class AiCameraDirectorBridge
@@ -67,19 +66,7 @@ public static class AiCameraDirectorBridge
 
     static string CreateVCam(string name, Transform target, out string vCamGlobalId, out string brainGlobalId)
     {
-        var mainCam = Camera.main;
-        if (mainCam == null)
-        {
-            var mainCamObj = new GameObject { name = "Main Camera" };
-            mainCam = mainCamObj.AddComponent<Camera>();
-        }
-
-        var brain = mainCam.GetComponent<CinemachineBrain>();
-        if (brain == null)
-        {
-            brain = mainCam.AddComponent<CinemachineBrain>();
-        }
-
+        var brain = EnsureBrain();
         brainGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(brain).ToString();
 
         var vCamGo = new GameObject { name = name };
@@ -94,9 +81,27 @@ public static class AiCameraDirectorBridge
         return BridgeProtocol.SUCCESS;
     }
 
+    /// <summary>Returns the CinemachineBrain on the main camera; creates a tagged Main Camera and/or brain if missing.</summary>
+    internal static CinemachineBrain EnsureBrain()
+    {
+        var mainCam = Camera.main;
+        if (mainCam == null)
+        {
+            var mainCamObj = new GameObject { name = "Main Camera", tag = "MainCamera" };
+            Undo.RegisterCreatedObjectUndo(mainCamObj, "Create Main Camera");
+            mainCam = mainCamObj.AddComponent<Camera>();
+        }
+
+        if (!mainCam.TryGetComponent<CinemachineBrain>(out var brain))
+        {
+            brain = Undo.AddComponent<CinemachineBrain>(mainCam.gameObject);
+        }
+        return brain;
+    }
+
     static void AddRotationTarget(Transform vCamTr)
     {
-        var rotationComposer = vCamTr.AddComponent<CinemachineRotationComposer>();
+        var rotationComposer = vCamTr.gameObject.AddComponent<CinemachineRotationComposer>();
         rotationComposer.CenterOnActivate = true;
         rotationComposer.Damping = new Vector2(.5f, .5f);
         rotationComposer.Composition.HardLimits.Enabled = true;
@@ -130,30 +135,39 @@ public static class AiCameraDirectorBridge
     static string CreateSpline(string name, List<Vector3> positionsInOrder, out string splineContainerGlobalId)
     {
         splineContainerGlobalId = string.Empty;
-        if (positionsInOrder is { Count: < 1 })
+        if (positionsInOrder is not { Count: >= 1 })
         {
             return BridgeProtocol.Failure("You tried creating a spline without knots. Provide at least 1 position.");
         }
 
-        var splineGo = new GameObject
+        var splineGo = new GameObject { name = name };
+        var splineContainer = BuildSpline(splineGo, positionsInOrder);
+        splineContainerGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(splineContainer).ToString();
+        return BridgeProtocol.SUCCESS;
+    }
+
+    /// <summary>Adds (or reuses) a SplineContainer on host and replaces its knots with the given world positions (AutoSmooth tangents).</summary>
+    internal static SplineContainer BuildSpline(GameObject host, IReadOnlyList<Vector3> worldPositions)
+    {
+        if (!host.TryGetComponent<SplineContainer>(out var splineContainer))
         {
-            name = name
-        };
-        var splineContainer = splineGo.AddComponent<SplineContainer>();
-        var spline = splineContainer.Spline;
-        foreach (var curPosition in positionsInOrder)
-        {
-            var knot = new BezierKnot(curPosition);
-            spline.Add(knot);
+            splineContainer = host.AddComponent<SplineContainer>();
         }
-        
-        // Glatte Tangenten berechnen
-        for (int i = 0; i < spline.Knots.Count(); i++)
+
+        var spline = splineContainer.Spline;
+        spline.Clear();
+        foreach (var worldPosition in worldPositions)
+        {
+            spline.Add(new BezierKnot(host.transform.InverseTransformPoint(worldPosition)));
+        }
+
+        // smooth tangents
+        for (int i = 0; i < spline.Count; i++)
         {
             spline.SetTangentMode(i, TangentMode.AutoSmooth);
         }
-        splineContainerGlobalId = GlobalObjectId.GetGlobalObjectIdSlow(splineContainer).ToString();
-        return BridgeProtocol.SUCCESS;
+        EditorUtility.SetDirty(splineContainer);
+        return splineContainer;
     }
 
     public static string AddCameraDollyToSpline(string containerGlobalIdString, string vCamGlobalIdString)
